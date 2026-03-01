@@ -4,41 +4,57 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import random
 import time
+import re
+import unicodedata
+
+# --- HILFSFUNKTIONEN FÜR DIE TEXTPRÜFUNG ---
+def normalize_string(s):
+    """Entfernt alle Akzente und Sonderzeichen (z.B. ñ -> n, á -> a)."""
+    # NFKD teilt Zeichen und Akzente auf, ASCII filtert die Akzente weg
+    return unicodedata.normalize('NFKD', str(s)).encode('ASCII', 'ignore').decode('utf-8')
+
+def get_acceptable_answers(correct_answer):
+    """
+    Erzeugt eine Liste aller akzeptierten Antworten.
+    Aus '(yo) hablo' wird z.B.: ['(yo) hablo', 'yo hablo', 'hablo']
+    """
+    ans = str(correct_answer).strip().lower()
+    acceptable = [ans]
+    
+    # Wenn Klammern in der Lösung stehen, bauen wir Alternativen
+    if '(' in ans and ')' in ans:
+        # Variante 1: Alles in Klammern komplett entfernen -> "hablo"
+        without_brackets = re.sub(r'\(.*?\)', '', ans).strip()
+        # Mehrfache Leerzeichen entfernen, falls welche übrig bleiben
+        without_brackets = re.sub(r'\s+', ' ', without_brackets)
+        acceptable.append(without_brackets)
+        
+        # Variante 2: Nur die Klammer-Symbole entfernen, Inhalt behalten -> "yo hablo"
+        without_bracket_symbols = ans.replace('(', '').replace(')', '').strip()
+        without_bracket_symbols = re.sub(r'\s+', ' ', without_bracket_symbols)
+        acceptable.append(without_bracket_symbols)
+        
+    return acceptable
 
 # --- KONFIGURATION & VERBINDUNG ---
 def get_gspread_client():
-    """
-    Lädt die Anmeldedaten aus den Streamlit Secrets, repariert Zeilenumbrüche
-    und verbindet sich mit den korrekten Berechtigungen mit Google Sheets.
-    """
-    # 1. Scopes für Google Sheets UND Google Drive definieren
-    # (Drive wird von gspread zwingend benötigt, um Tabellen per Namen zu suchen)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
-    
-    # 2. Secrets in ein anpassbares Dictionary laden
     credentials_dict = dict(st.secrets["gcp_service_account"])
-    
-    # 3. Bulletproof-Trick: \n im private_key in echte Zeilenumbrüche umwandeln
     credentials_dict["private_key"] = credentials_dict["private_key"].replace("\\n", "\n")
-    
-    # 4. Credentials-Objekt mit den reparierten Daten und neuen Scopes erstellen
     creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
-    
-    # 5. Client autorisieren und zurückgeben
     return gspread.authorize(creds)
 
 def load_data():
     client = get_gspread_client()
-    # Ersetze "Dein_Sheet_Name" durch den echten Namen deiner Datei
+    # Hier ist deine direkte URL
     sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1tvzRVjyVlsRj_hkyJcRzwSVdQqInFDiTyPOfuxtSNvQ/edit?gid=1963155081#gid=1963155081").sheet1
     data = sheet.get_all_records()
     return pd.DataFrame(data), sheet
 
 # --- APP SETUP ---
-# Muss immer der erste Streamlit-Befehl sein!
 st.set_page_config(page_title="Vokabel-Pro", layout="centered")
 
 if "df" not in st.session_state:
@@ -52,8 +68,6 @@ if "df" not in st.session_state:
 def get_next_vokabel():
     df = st.session_state.df
     col_weight = "Gewicht_ES_DE" if st.session_state.reverse else "Gewicht_DE_ES"
-    
-    # Gewichtete Zufallsauswahl: 1/Gewichtung sorgt dafür, dass kleine Werte öfter kommen
     weights = 1.0 / df[col_weight].astype(float)
     return df.sample(n=1, weights=weights).iloc[0]
 
@@ -85,33 +99,44 @@ if submit:
     if user_input.strip() == "":
         st.warning("Bitte gib zuerst ein Wort ein! ✍️")
     else:
-        # 2. Antwort bereinigen und prüfen
-        clean_user = user_input.strip().lower()
-        clean_correct = str(antwort_korrekt).strip().lower()
+        # 2. Antwort bereinigen und Listen für die Prüfung erstellen
+        user_clean = user_input.strip().lower()
+        acceptable_answers = get_acceptable_answers(antwort_korrekt)
+        
+        # Normalisierte Versionen (ohne Akzente) für die Toleranz-Prüfung erstellen
+        user_norm = normalize_string(user_clean)
+        acceptable_norm = [normalize_string(a) for a in acceptable_answers]
         
         col_weight = "Gewicht_ES_DE" if st.session_state.reverse else "Gewicht_DE_ES"
         idx = st.session_state.df[st.session_state.df.index == vok.name].index[0]
         
-        if clean_user == clean_correct:
+        # 3. Die intelligente Prüfung
+        if user_clean in acceptable_answers:
+            # Fall A: Perfekte Antwort (mit Akzenten / richtiger Klammernutzung)
             st.success("Richtig! 🎉")
-            # Gewichtung erhöhen (erscheint seltener)
             st.session_state.df.at[idx, col_weight] += 0.2
+            
+        elif user_norm in acceptable_norm:
+            # Fall B: Richtig, aber Akzente fehlen oder sind falsch gesetzt
+            st.success("Fast perfekt! 🎉")
+            st.info(f"**Hinweis:** Achte auf die Akzente! Richtig geschrieben: **{antwort_korrekt}**")
+            # Wir werten es trotzdem als richtig
+            st.session_state.df.at[idx, col_weight] += 0.2
+            
         else:
-            st.error(f"Leider falsch. Richtig wäre: {antwort_korrekt}")
-            # Gewichtung senken (erscheint häufiger), minimal 0.1
+            # Fall C: Wirklich falsch
+            st.error(f"Leider falsch. Richtig wäre: **{antwort_korrekt}**")
             new_val = st.session_state.df.at[idx, col_weight] - 0.5
             st.session_state.df.at[idx, col_weight] = max(0.1, new_val)
 
-        # 3. Fortschrittszähler für Google Sheets
+        # 4. Fortschrittszähler für Google Sheets
         st.session_state.counter += 1
         if st.session_state.counter >= 5:
             st.session_state.sheet.update([st.session_state.df.columns.values.tolist()] + st.session_state.df.values.tolist())
             st.session_state.counter = 0
             st.toast("Fortschritt in Google Sheets gespeichert! 💾")
 
-        # 4. Nächste Vokabel laden
+        # 5. Nächste Vokabel laden und Pause machen
         st.session_state.current_vok = get_next_vokabel()
-        
-        # 5. Magie: Kurz warten, damit man die Lösung lesen kann, dann flüssig neu laden
-        time.sleep(2.5)
+        time.sleep(3.5) # Etwas längere Pause, damit man die Hinweise in Ruhe lesen kann
         st.rerun()
