@@ -1,0 +1,91 @@
+import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
+import pandas as pd
+import random
+
+# --- KONFIGURATION & VERBINDUNG ---
+# In Streamlit Cloud fügst du den Inhalt deiner JSON unter "Secrets" ein
+def get_gspread_client():
+    scope = ["https://www.googleapis.com/auth/spreadsheets"]
+    # Nutzt Streamlit Secrets für die Sicherheit
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+    return gspread.authorize(creds)
+
+def load_data():
+    client = get_gspread_client()
+    # Ersetze "Dein_Sheet_Name" durch den echten Namen deiner Datei
+    sheet = client.open("Vokabeltrainer_Spanisch").sheet1 
+    data = sheet.get_all_records()
+    return pd.DataFrame(data), sheet
+
+# --- APP SETUP ---
+st.set_page_config(page_title="Vokabel-Pro", layout="centered")
+
+if "df" not in st.session_state:
+    df, sheet = load_data()
+    st.session_state.df = df
+    st.session_state.sheet = sheet
+    st.session_state.counter = 0
+    st.session_state.reverse = False # False: DE->ES, True: ES->DE
+
+# --- LOGIK ---
+def get_next_vokabel():
+    df = st.session_state.df
+    col_weight = "Gewicht_ES_DE" if st.session_state.reverse else "Gewicht_DE_ES"
+    
+    # Gewichtete Zufallsauswahl: 1/Gewichtung sorgt dafür, dass kleine Werte öfter kommen
+    weights = 1.0 / df[col_weight].astype(float)
+    return df.sample(n=1, weights=weights).iloc[0]
+
+if "current_vok" not in st.session_state:
+    st.session_state.current_vok = get_next_vokabel()
+
+# --- UI OBEN ---
+col_header, col_toggle = st.columns([3, 1])
+with col_toggle:
+    if st.button("🔄 Drehen"):
+        st.session_state.reverse = not st.session_state.reverse
+        st.session_state.current_vok = get_next_vokabel()
+        st.rerun()
+
+# --- HAUPTTEIL ---
+vok = st.session_state.current_vok
+frage = vok["Spanisch"] if st.session_state.reverse else vok["Deutsch"]
+antwort_korrekt = vok["Deutsch"] if st.session_state.reverse else vok["Spanisch"]
+
+st.markdown(f"### Wie sagt man auf {'Deutsch' if st.session_state.reverse else 'Spanisch'}?")
+st.info(f"## {frage}")
+
+with st.form(key="answer_form", clear_on_submit=True):
+    user_input = st.text_input("Deine Antwort:")
+    submit = st.form_submit_button("Prüfen")
+
+if submit:
+    # Einfache Fehlertoleranz
+    clean_user = user_input.strip().lower()
+    clean_correct = antwort_korrekt.strip().lower()
+    
+    col_weight = "Gewicht_ES_DE" if st.session_state.reverse else "Gewicht_DE_ES"
+    idx = st.session_state.df[st.session_state.df.index == vok.name].index[0]
+    
+    if clean_user == clean_correct:
+        st.success("Richtig! 🎉")
+        # Gewichtung erhöhen (erscheint seltener)
+        st.session_state.df.at[idx, col_weight] += 0.2
+    else:
+        st.error(f"Leider falsch. Richtig wäre: {antwort_korrekt}")
+        # Gewichtung senken (erscheint häufiger), minimal 0.1
+        new_val = st.session_state.df.at[idx, col_weight] - 0.5
+        st.session_state.df.at[idx, col_weight] = max(0.1, new_val)
+
+    # Zwischenspeichern & Nächste Vokabel
+    st.session_state.counter += 1
+    if st.session_state.counter >= 5:
+        # Hier schreiben wir zurück ins Google Sheet
+        st.session_state.sheet.update([st.session_state.df.columns.values.tolist()] + st.session_state.df.values.tolist())
+        st.session_state.counter = 0
+        st.toast("Fortschritt gespeichert!")
+
+    st.session_state.current_vok = get_next_vokabel()
+    st.button("Nächste Vokabel")
