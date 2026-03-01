@@ -32,7 +32,7 @@ def get_gspread_client():
 def load_data():
     client = get_gspread_client()
     # Ersetze "Dein_Sheet_Name" durch den echten Namen deiner Datei
-    sheet = client.open("Vokabeltrainer_Spanisch").sheet1 
+    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1tvzRVjyVlsRj_hkyJcRzwSVdQqInFDiTyPOfuxtSNvQ/edit?gid=1963155081#gid=1963155081").sheet1
     data = sheet.get_all_records()
     return pd.DataFrame(data), sheet
 
