@@ -5,11 +5,28 @@ import pandas as pd
 import random
 
 # --- KONFIGURATION & VERBINDUNG ---
-# In Streamlit Cloud fügst du den Inhalt deiner JSON unter "Secrets" ein
 def get_gspread_client():
-    scope = ["https://www.googleapis.com/auth/spreadsheets"]
-    # Nutzt Streamlit Secrets für die Sicherheit
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+    """
+    Lädt die Anmeldedaten aus den Streamlit Secrets, repariert Zeilenumbrüche
+    und verbindet sich mit den korrekten Berechtigungen mit Google Sheets.
+    """
+    # 1. Scopes für Google Sheets UND Google Drive definieren
+    # (Drive wird von gspread zwingend benötigt, um Tabellen per Namen zu suchen)
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    
+    # 2. Secrets in ein anpassbares Dictionary laden
+    credentials_dict = dict(st.secrets["gcp_service_account"])
+    
+    # 3. Bulletproof-Trick: \n im private_key in echte Zeilenumbrüche umwandeln
+    credentials_dict["private_key"] = credentials_dict["private_key"].replace("\\n", "\n")
+    
+    # 4. Credentials-Objekt mit den reparierten Daten und neuen Scopes erstellen
+    creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+    
+    # 5. Client autorisieren und zurückgeben
     return gspread.authorize(creds)
 
 def load_data():
@@ -20,6 +37,7 @@ def load_data():
     return pd.DataFrame(data), sheet
 
 # --- APP SETUP ---
+# Muss immer der erste Streamlit-Befehl sein!
 st.set_page_config(page_title="Vokabel-Pro", layout="centered")
 
 if "df" not in st.session_state:
