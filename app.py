@@ -138,5 +138,5 @@ if submit:
 
         # 5. Nächste Vokabel laden und Pause machen
         st.session_state.current_vok = get_next_vokabel()
-        time.sleep(3.5) # Etwas längere Pause, damit man die Hinweise in Ruhe lesen kann
+        time.sleep(1.5) # Etwas längere Pause, damit man die Hinweise in Ruhe lesen kann
         st.rerun()
