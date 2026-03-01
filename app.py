@@ -3,6 +3,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 import random
+import time
 
 # --- KONFIGURATION & VERBINDUNG ---
 def get_gspread_client():
@@ -80,30 +81,37 @@ with st.form(key="answer_form", clear_on_submit=True):
     submit = st.form_submit_button("Prüfen")
 
 if submit:
-    # Einfache Fehlertoleranz
-    clean_user = user_input.strip().lower()
-    clean_correct = antwort_korrekt.strip().lower()
-    
-    col_weight = "Gewicht_ES_DE" if st.session_state.reverse else "Gewicht_DE_ES"
-    idx = st.session_state.df[st.session_state.df.index == vok.name].index[0]
-    
-    if clean_user == clean_correct:
-        st.success("Richtig! 🎉")
-        # Gewichtung erhöhen (erscheint seltener)
-        st.session_state.df.at[idx, col_weight] += 0.2
+    # 1. Sicherheitscheck: Wurde überhaupt etwas eingegeben?
+    if user_input.strip() == "":
+        st.warning("Bitte gib zuerst ein Wort ein! ✍️")
     else:
-        st.error(f"Leider falsch. Richtig wäre: {antwort_korrekt}")
-        # Gewichtung senken (erscheint häufiger), minimal 0.1
-        new_val = st.session_state.df.at[idx, col_weight] - 0.5
-        st.session_state.df.at[idx, col_weight] = max(0.1, new_val)
+        # 2. Antwort bereinigen und prüfen
+        clean_user = user_input.strip().lower()
+        clean_correct = str(antwort_korrekt).strip().lower()
+        
+        col_weight = "Gewicht_ES_DE" if st.session_state.reverse else "Gewicht_DE_ES"
+        idx = st.session_state.df[st.session_state.df.index == vok.name].index[0]
+        
+        if clean_user == clean_correct:
+            st.success("Richtig! 🎉")
+            # Gewichtung erhöhen (erscheint seltener)
+            st.session_state.df.at[idx, col_weight] += 0.2
+        else:
+            st.error(f"Leider falsch. Richtig wäre: {antwort_korrekt}")
+            # Gewichtung senken (erscheint häufiger), minimal 0.1
+            new_val = st.session_state.df.at[idx, col_weight] - 0.5
+            st.session_state.df.at[idx, col_weight] = max(0.1, new_val)
 
-    # Zwischenspeichern & Nächste Vokabel
-    st.session_state.counter += 1
-    if st.session_state.counter >= 5:
-        # Hier schreiben wir zurück ins Google Sheet
-        st.session_state.sheet.update([st.session_state.df.columns.values.tolist()] + st.session_state.df.values.tolist())
-        st.session_state.counter = 0
-        st.toast("Fortschritt gespeichert!")
+        # 3. Fortschrittszähler für Google Sheets
+        st.session_state.counter += 1
+        if st.session_state.counter >= 5:
+            st.session_state.sheet.update([st.session_state.df.columns.values.tolist()] + st.session_state.df.values.tolist())
+            st.session_state.counter = 0
+            st.toast("Fortschritt in Google Sheets gespeichert! 💾")
 
-    st.session_state.current_vok = get_next_vokabel()
-    st.button("Nächste Vokabel")
+        # 4. Nächste Vokabel laden
+        st.session_state.current_vok = get_next_vokabel()
+        
+        # 5. Magie: Kurz warten, damit man die Lösung lesen kann, dann flüssig neu laden
+        time.sleep(2.5)
+        st.rerun()
